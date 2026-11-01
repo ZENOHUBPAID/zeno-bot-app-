@@ -1,171 +1,140 @@
-// ZENO BOT V7 - SANS TOKEN TEST REST (évite 429) + LOGIN DIRECT
+// ZENO APP V9.2 - MENTION @MEMBER + ADMIN ONLY
+// @MEMBER ID: 1565109940757078108
+// @ADMIN ID: 1565109430880706570 (seul ce rôle peut faire !logsdown)
+
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
+const fetch = require('node-fetch');
 
 const TOKEN = (process.env.DISCORD_TOKEN || '').trim();
 const PORT = process.env.PORT || 10000;
 const JNKIE_API_KEY = (process.env.JNKIE_API_KEY || '').trim();
 const JNKIE_SCRIPT_ID = (process.env.JNKIE_SCRIPT_ID || 'ZENOFINDER').trim();
 
-console.log(`[ZENO] Starting V7... Token exists: ${!!TOKEN} length: ${TOKEN.length}`);
-console.log(`[ZENO] First 10: ${TOKEN.substring(0,10)} Last 10: ...${TOKEN.slice(-10)}`);
-console.log(`[JNKIE] Key exists: ${!!JNKIE_API_KEY} Script: ${JNKIE_SCRIPT_ID}`);
+const MEMBER_ROLE_ID = '1565109940757078108';
+const ADMIN_ROLE_ID = '1565109430880706570';
 
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
-    ]
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
 });
 
-let jnkieLinks = {};
-let whitelist = new Set();
-let blacklist = new Set();
+let slotsPaused = false;
 
-async function syncJNKIE() {
-    if (!JNKIE_API_KEY) return;
+function hasAdminRole(member) {
+    if (!member) return false;
+    // Admin Discord OU rôle @ADMIN 1565109430880706570
+    return member.permissions.has('Administrator') || member.roles.cache.has(ADMIN_ROLE_ID);
+}
+
+async function freezeTimersJNKIE(freeze = true) {
+    if (!JNKIE_API_KEY) return false;
     try {
-        const fetch = require('node-fetch');
-        const res = await fetch(`https://api.jnkie.com/v1/scripts/${JNKIE_SCRIPT_ID}/data`, {
-            headers: { 'Authorization': `Bearer ${JNKIE_API_KEY}` }
-        });
-        if (!res.ok) return;
-        const json = await res.json();
-        let count = 0;
-        const data = Array.isArray(json) ? json : (json.data || []);
-        data.forEach(entry => {
-            if (entry.discordId && entry.robloxUsername) {
-                jnkieLinks[entry.discordId] = entry.robloxUsername;
-                count++;
-            }
-        });
-        console.log(`[JNKIE SYNC] Loaded ${count} liens. Ex: ${Object.entries(jnkieLinks).slice(0,1).map(([k,v])=>`${k}=${v}`).join('')}`);
+        const url = `https://api.jnkie.com/v1/scripts/${JNKIE_SCRIPT_ID}/${freeze ? 'pause' : 'resume'}`;
+        const res = await fetch(url, { method: 'POST', headers: { 'Authorization': `Bearer ${JNKIE_API_KEY}`, 'Content-Type': 'application/json' } });
+        console.log(`[JNKIE] ${freeze ? 'FREEZE' : 'UNFREEZE'} -> ${res.status}`);
+        return true;
     } catch(e) {
-        console.log(`[JNKIE] Erreur sync: ${e.message}`);
+        console.log(`[JNKIE] Erreur: ${e.message}`);
+        return false;
     }
 }
 
-client.on('ready', async () => {
-    console.log(`[ZENO APP + JNKIE] Connecté en tant que ${client.user.tag}`);
-    console.log(`[ZENO] Bot ID: ${client.user.id} - ONLINE 🟢`);
-    await syncJNKIE();
-    setInterval(syncJNKIE, 5*60*1000);
-});
+async function sendUpdateLogs(isDown) {
+    const guild = client.guilds.cache.first();
+    if (!guild) return console.log("[UPDATE-LOGS] Pas de serveur");
 
-client.on('error', e => console.log(`[DISCORD ERROR] ${e.message}`));
-client.on('shardError', e => console.log(`[SHARD ERROR] ${e.message}`));
+    let channel = guild.channels.cache.find(c => c.name.toLowerCase().includes('update-logs'));
+    if (!channel) channel = guild.channels.cache.find(c => c.name.toLowerCase().includes('update'));
+    if (!channel) return console.log("[UPDATE-LOGS] Salon #update-logs pas trouvé");
+
+    // Mention @MEMBER avec l'ID que tu as donné
+    const memberMention = `<@&${MEMBER_ROLE_ID}>`;
+
+    let content, embed;
+    if (isDown) {
+        content = `${memberMention}\nLogs are down. Slots are paused — timers are frozen.`;
+        embed = new EmbedBuilder()
+            .setColor(0xff0000)
+            .setTitle('⚠️ Logs Down')
+            .setDescription('**Logs are down. Slots are paused — timers are frozen.**\n\nLes bots sont en pause, les timers sont figés pour tous les membres.\n@MEMBER ne perd pas de jours.')
+            .setTimestamp()
+            .setFooter({ text: 'ZENO NOTIFIER - Slots Paused' });
+        slotsPaused = true;
+        await freezeTimersJNKIE(true);
+    } else {
+        content = `${memberMention}\nBots are back up. Slots unpaused - timers unfreezed.`;
+        embed = new EmbedBuilder()
+            .setColor(0x00ff00)
+            .setTitle('✅ Bots Back Up')
+            .setDescription('**Bots are back up. Slots unpaused - timers unfreezed.**\n\nLes bots sont de retour, les timers sont relancés !')
+            .setTimestamp()
+            .setFooter({ text: 'ZENO NOTIFIER - Slots Unpaused' });
+        slotsPaused = false;
+        await freezeTimersJNKIE(false);
+    }
+
+    try {
+        await channel.send({ 
+            content, 
+            embeds: [embed],
+            allowedMentions: { roles: [MEMBER_ROLE_ID] } // autorise le ping @MEMBER
+        });
+        console.log(`[UPDATE-LOGS] Message ${isDown ? 'DOWN' : 'UP'} envoyé avec <@&${MEMBER_ROLE_ID}> dans #${channel.name}`);
+    } catch(e) {
+        console.log(`[UPDATE-LOGS] Erreur: ${e.message}`);
+    }
+}
+
+client.on('ready', () => {
+    console.log(`[ZENO APP V9.2] Connecté en tant que ${client.user.tag} - ONLINE 🟢`);
+    console.log(`[CONFIG] @MEMBER ID: ${MEMBER_ROLE_ID} - @ADMIN ID: ${ADMIN_ROLE_ID}`);
+});
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
-    const content = message.content.trim();
-    if (!content.startsWith('!')) return;
-    const args = content.slice(1).split(/\s+/);
+    if (!message.content.startsWith('!')) return;
+    
+    const args = message.content.slice(1).trim().split(/\s+/);
     const cmd = args.shift().toLowerCase();
+
+    // Vérif ADMIN uniquement
+    const isAdmin = hasAdminRole(message.member);
+    
+    if (cmd === 'logsdown' || cmd === 'logs_down') {
+        if (!isAdmin) return message.reply(`❌ Seul <@&${ADMIN_ROLE_ID}> peut faire cette commande`);
+        await sendUpdateLogs(true);
+        return message.reply(`✅ Message Logs Down envoyé avec <@&${MEMBER_ROLE_ID}> + timers frozen`);
+    }
+    
+    if (cmd === 'logsback' || cmd === 'logs_up' || cmd === 'botsup' || cmd === 'backup') {
+        if (!isAdmin) return message.reply(`❌ Seul <@&${ADMIN_ROLE_ID}> peut faire cette commande`);
+        await sendUpdateLogs(false);
+        return message.reply(`✅ Message Bots Back Up envoyé avec <@&${MEMBER_ROLE_ID}> + timers unfreezed`);
+    }
+
+    if (cmd === 'freezetimers') {
+        if (!isAdmin) return message.reply(`❌ Seul <@&${ADMIN_ROLE_ID}> peut faire cette commande`);
+        const ok = await freezeTimersJNKIE(true);
+        return message.reply(ok ? `✅ Timers figés pour <@&${MEMBER_ROLE_ID}>` : "⚠️ Fais-le manuellement sur jnkie.com");
+    }
+
+    if (cmd === 'unfreezetimers') {
+        if (!isAdmin) return message.reply(`❌ Seul <@&${ADMIN_ROLE_ID}> peut faire cette commande`);
+        const ok = await freezeTimersJNKIE(false);
+        return message.reply(ok ? `✅ Timers relancés pour <@&${MEMBER_ROLE_ID}>` : "⚠️ Fais-le manuellement sur jnkie.com");
+    }
 
     if (cmd === 'botinfo') {
         const embed = new EmbedBuilder()
-            .setColor(0x9b59b6)
-            .setTitle('ZENO APP Bot V7')
-            .setDescription(`Online ✅\nWhitelist: ${whitelist.size}\nBlacklist: ${blacklist.size}\nJNKIE: ${Object.keys(jnkieLinks).length}`)
+            .setColor(slotsPaused ? 0xff0000 : 0x00ff00)
+            .setTitle('ZENO APP V9.2 - @MEMBER + @ADMIN')
+            .setDescription(`Status: ${slotsPaused ? '🔴 Logs Down - Slots Paused - Timers Frozen' : '🟢 Online'}\n\n@MEMBER: <@&${MEMBER_ROLE_ID}>\n@ADMIN: <@&${ADMIN_ROLE_ID}> (seul ce rôle peut faire les commandes)\n\nCommandes ADMIN:\n!logsdown - Logs down + freeze timers\n!logsback - Bots back up + unfreeze\n!freezetimers / !unfreezetimers`)
             .setTimestamp();
-        return message.reply({ embeds: [embed] });
-    }
-    if (cmd === 'check') {
-        const target = args[0];
-        if (!target) return message.reply("Usage: !check <roblox ou @discord>");
-        let robloxName = target;
-        const mentionMatch = target.match(/<@!?(\d+)>/);
-        if (mentionMatch) {
-            const discordId = mentionMatch[1];
-            if (jnkieLinks[discordId]) {
-                robloxName = jnkieLinks[discordId];
-            } else {
-                return message.reply(`Pas de lien JNKIE pour <@${discordId}>`);
-            }
-        }
-        if (jnkieLinks[target]) robloxName = jnkieLinks[target];
-        const isWL = whitelist.has(robloxName.toLowerCase());
-        const isBL = blacklist.has(robloxName.toLowerCase());
-        const embed = new EmbedBuilder()
-            .setColor(isBL ? 0xff0000 : isWL ? 0x00ff00 : 0x808080)
-            .setTitle(`Check: ${robloxName}`)
-            .setDescription(`${isWL ? '✅ Whitelisted' : ''} ${isBL ? '🚫 Blacklisted' : ''} ${!isWL && !isBL ? '❔ Not listed' : ''}`)
-            .setTimestamp();
-        return message.reply({ embeds: [embed] });
-    }
-    if (cmd === 'whitelist') {
-        const robloxName = args[0];
-        if (!robloxName) return message.reply("Usage: !whitelist <roblox> [reason]");
-        whitelist.add(robloxName.toLowerCase());
-        blacklist.delete(robloxName.toLowerCase());
-        const reason = args.slice(1).join(' ') || 'No reason';
-        const embed = new EmbedBuilder().setColor(0x00ff00).setTitle('✅ Whitelisted').setDescription(`**${robloxName}**\n${reason}\nTotal: ${whitelist.size}`).setTimestamp();
-        const channel = message.guild.channels.cache.find(c => c.name.toLowerCase().includes('whitelist'));
-        if (channel) await channel.send({ embeds: [embed] }).catch(()=>{});
-        return message.reply({ embeds: [embed] });
-    }
-    if (cmd === 'blacklist') {
-        let robloxName = args[0];
-        if (!robloxName) return message.reply("Usage: !blacklist <roblox> [reason]");
-        const mentionMatch = robloxName.match(/<@!?(\d+)>/);
-        if (mentionMatch && jnkieLinks[mentionMatch[1]]) robloxName = jnkieLinks[mentionMatch[1]];
-        else if (jnkieLinks[robloxName]) robloxName = jnkieLinks[robloxName];
-        blacklist.add(robloxName.toLowerCase());
-        whitelist.delete(robloxName.toLowerCase());
-        const reason = args.slice(1).join(' ') || 'No reason';
-        const embed = new EmbedBuilder().setColor(0xff0000).setTitle('🚫 Blacklisted').setDescription(`**${robloxName}**\n${reason}\nTotal: ${blacklist.size}`).setTimestamp();
-        const channel = message.guild.channels.cache.find(c => c.name.toLowerCase().includes('blacklist'));
-        if (channel) await channel.send({ embeds: [embed] }).catch(()=>{});
-        return message.reply({ embeds: [embed] });
-    }
-    if (cmd === 'unwhitelist' || cmd === 'unblacklist') {
-        const robloxName = args[0];
-        if (!robloxName) return message.reply(`Usage: !${cmd} <roblox>`);
-        whitelist.delete(robloxName.toLowerCase());
-        blacklist.delete(robloxName.toLowerCase());
-        return message.reply(`✅ ${robloxName} retiré des listes`);
+        return message.reply({ embeds: [embed], allowedMentions: { roles: [MEMBER_ROLE_ID, ADMIN_ROLE_ID] } });
     }
 });
 
-// LOGIN SANS TEST REST (évite 429)
-if (!TOKEN) {
-    console.log("[ERROR] Pas de token");
-} else {
-    console.log("[LOGIN] Tentative login direct (sans REST test pour éviter 429)...");
-    client.login(TOKEN).then(() => {
-        console.log("[LOGIN] login() appelé, en attente ready event...");
-    }).catch(e => {
-        console.log(`[LOGIN ERROR] ${e.message}`);
-        if (e.message.includes('429') || e.code === 1015) {
-            console.log("[LOGIN] Rate limit 429 - Attends 15 min sans reset, puis redeploy");
-        }
-        console.log(e.stack);
-    });
-}
-
-// API
+client.login(TOKEN).catch(e=>console.log(`[LOGIN ERROR] ${e.message}`));
 const app = express();
-app.get('/', (req, res) => {
-    res.json({ 
-        status: 'ZENO APP + JNKIE Online', 
-        whitelist: whitelist.size, 
-        blacklist: blacklist.size, 
-        jnkie_links: Object.keys(jnkieLinks).length,
-        discord: client.user ? `${client.user.tag} Online` : 'Offline - Rate limit 429? Attends 15min',
-        timestamp: new Date().toISOString()
-    });
-});
-app.get('/check/:username', (req, res) => {
-    const name = req.params.username.toLowerCase();
-    res.json({
-        username: req.params.username,
-        whitelisted: whitelist.has(name),
-        blacklisted: blacklist.has(name)
-    });
-});
-app.listen(PORT, () => {
-    console.log(`[API] Listening on port ${PORT}`);
-    console.log(`[API] https://zeno-app-bot.onrender.com`);
-});
+app.get('/', (req, res) => res.json({ status: client.user ? `Online ${client.user.tag}` : 'Starting...', slotsPaused, memberRole: MEMBER_ROLE_ID, adminRole: ADMIN_ROLE_ID }));
+app.listen(PORT, () => console.log(`[API] Port ${PORT}`));
