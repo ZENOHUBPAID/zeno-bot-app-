@@ -1,96 +1,117 @@
 
 const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
 const fs = require('fs');
+const http = require('http');
 
 const TOKEN = process.env.DISCORD_TOKEN;
-const JNKIE_API_KEY = process.env.JNKIE_API_KEY; // Tu le trouves sur jnkie.com -> Settings -> API Key
-const JNKIE_SCRIPT_ID = process.env.JNKIE_SCRIPT_ID || "ZENOFINDER"; // Nom de ton script sur Jnkie
-const PREFIX = "!";
+const JNKIE_API_KEY = process.env.JNKIE_API_KEY;
+const JNKIE_SCRIPT_ID = process.env.JNKIE_SCRIPT_ID || "ZENOFINDER";
 const PORT = process.env.PORT || 10000;
+
+console.log("[ZENO] Starting... Token exists:", !!TOKEN);
+console.log("[ZENO] JNKIE key exists:", !!JNKIE_API_KEY);
 
 let whitelist = {};
 let blacklist = {};
+let jnkieMap = {};
+
 try { whitelist = JSON.parse(fs.readFileSync("whitelist.json","utf8")); } catch(e) { whitelist = {}; }
 try { blacklist = JSON.parse(fs.readFileSync("blacklist.json","utf8")); } catch(e) { blacklist = {}; }
-
-// Cache Jnkie: discordId -> robloxUsername
-let jnkieMap = {}; // { "1324116758432317524": "KTASAbdoulaye" }
+try { jnkieMap = JSON.parse(fs.readFileSync("jnkie_map.json","utf8")); } catch(e) { jnkieMap = {}; }
 
 function saveLists(){
-    fs.writeFileSync("whitelist.json", JSON.stringify(whitelist,null,2));
-    fs.writeFileSync("blacklist.json", JSON.stringify(blacklist,null,2));
-    fs.writeFileSync("jnkie_map.json", JSON.stringify(jnkieMap,null,2));
+    try {
+        fs.writeFileSync("whitelist.json", JSON.stringify(whitelist,null,2));
+        fs.writeFileSync("blacklist.json", JSON.stringify(blacklist,null,2));
+        fs.writeFileSync("jnkie_map.json", JSON.stringify(jnkieMap,null,2));
+        console.log(`[SAVE] W:${Object.keys(whitelist).length} B:${Object.keys(blacklist).length} J:${Object.keys(jnkieMap).length}`);
+    } catch(e){ console.log("[SAVE ERROR]", e.message); }
 }
 
-// Récupère tous les keys depuis Jnkie API
 async function syncJnkie(){
-    if(!JNKIE_API_KEY) {
-        console.log("[JNKIE] Pas de JNKIE_API_KEY, sync désactivé - tu dois faire !blacklist avec pseudo Roblox à la main");
+    if(!JNKIE_API_KEY){
+        console.log("[JNKIE] No API key, skip sync");
         return;
     }
     try {
-        const res = await fetch(`https://api.jnkie.com/v1/scripts/${JNKIE_SCRIPT_ID}/keys`, {
-            headers: { "Authorization": `Bearer ${JNKIE_API_KEY}` }
-        });
+        const url = `https://api.jnkie.com/v1/scripts/${JNKIE_SCRIPT_ID}/keys`;
+        console.log("[JNKIE] Syncing from", url);
+        const res = await fetch(url, { headers: { "Authorization": `Bearer ${JNKIE_API_KEY}`, "Content-Type": "application/json" } });
+        if(!res.ok){
+            console.log("[JNKIE] API error", res.status, await res.text().then(t=>t.slice(0,200)));
+            return;
+        }
         const data = await res.json();
-        // data = [{ key: "ZENOFINDER-2977...", discordId: "1324116758432317524", robloxUsername: "KTASAbdoulaye", status: "Used" }, ...]
         let count = 0;
-        for(const k of data.keys || data || []){
-            // Format peut varier, on gère 2 formats
-            const discordId = k.discordId || k.discord_id || k.userId || (k.discord && k.discord.id);
-            const robloxName = k.robloxUsername || k.roblox_username || k.robloxName || k.username;
+        const keys = data.keys || data.data || data || [];
+        for(const k of keys){
+            const discordId = k.discordId || k.discord_id || k.userId || (k.discord && k.discord.id) || k.discordID;
+            const robloxName = k.robloxUsername || k.roblox_username || k.robloxName || k.username || k.robloxUser || k.roblox;
             if(discordId && robloxName){
                 jnkieMap[discordId] = robloxName;
                 count++;
             }
         }
-        fs.writeFileSync("jnkie_map.json", JSON.stringify(jnkieMap,null,2));
-        console.log(`[JNKIE SYNC] ${count} liens Discord->Roblox chargés. Ex: 1324116758432317524 = ${jnkieMap["1324116758432317524"] || "KTASAbdoulaye"}`);
+        saveLists();
+        console.log(`[JNKIE SYNC] Loaded ${count} links. Example: ${Object.keys(jnkieMap)[0]} = ${Object.values(jnkieMap)[0]}`);
     } catch(e){
         console.log("[JNKIE SYNC ERROR]", e.message);
     }
 }
 
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ]
 });
 
 client.on('ready', async () => {
-    console.log(`[ZENO APP + JNKIE] Connecté ${client.user.tag}`);
+    console.log(`[ZENO APP + JNKIE] Connecté en tant que ${client.user.tag}`);
+    console.log(`[ZENO] Serving ${client.guilds.cache.size} guilds`);
     await syncJnkie();
-    setInterval(syncJnkie, 60000); // resync toutes les 60 sec
+    setInterval(syncJnkie, 120000);
 });
+
+client.on('error', (e) => console.log("[DISCORD ERROR]", e.message));
+client.on('shardError', (e) => console.log("[SHARD ERROR]", e.message));
 
 client.on('messageCreate', async (message) => {
     if(message.author.bot) return;
-    if(!message.content.startsWith(PREFIX)) return;
+    if(!message.content.startsWith("!")) return;
     
-    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+    console.log(`[CMD] ${message.author.tag}: ${message.content}`);
+    
+    const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
-    const isAdmin = message.member.permissions.has(PermissionsBitField.Flags.Administrator);
+    const member = message.member;
+    const isAdmin = member && member.permissions.has(PermissionsBitField.Flags.Administrator);
     
     if(command === "whitelist" || command === "blacklist"){
-        if(!isAdmin) return message.reply("❌ Admin only");
+        if(!isAdmin){ return message.reply("❌ Admin only."); }
         
         let robloxUsername = args[0];
         let discordUser = message.mentions.users.first();
         let discordId = null;
         
-        // CAS 1: !blacklist @Discord -> on cherche son Roblox via Jnkie
+        // Si mention Discord seule: chercher via Jnkie
         if(discordUser || (robloxUsername && robloxUsername.startsWith("<@"))){
             discordId = discordUser ? discordUser.id : robloxUsername.replace(/[<@!>]/g,"");
-            // Chercher dans jnkieMap
             if(jnkieMap[discordId]){
                 robloxUsername = jnkieMap[discordId];
-                message.channel.send(`🔗 **Jnkie Link trouvé:** <@${discordId}> = **${robloxUsername}** (vu sur ton screen: KTASAbdoulaye = 1324116758432317524)`);
+                await message.channel.send(`🔗 **Jnkie Link trouvé:** <@${discordId}> = **${robloxUsername}**`);
             } else {
-                // Si pas trouvé dans cache, on dit comment faire
-                return message.reply(`❌ J'ai pas trouvé le Roblox de <@${discordId}> dans Jnkie.\n\nTon screen montre que Jnkie le sait pourtant: Discord: 1324116758432317524 = KTASAbdoulaye.\nAssure-toi que JNKIE_API_KEY est configuré sur Render, ou fais manuellement:\n\`!${command} KTASAbdoulaye raison @user\``);
+                // Si pas trouvé dans Jnkie, essayer de prendre le pseudo Roblox depuis le mentionné? Non, demander
+                if(!robloxUsername || robloxUsername.startsWith("<@")){
+                    return message.reply(`❌ J'ai pas trouvé le Roblox de <@${discordId}> dans Jnkie (${Object.keys(jnkieMap).length} liens chargés).\nUtilise: \`!${command} <roblox_username> [raison] [@discord]\``);
+                }
             }
         }
         
         if(!robloxUsername || robloxUsername.startsWith("<@")){
-            return message.reply(`Usage:\n\`!${command} <roblox_pseudo> [raison] [@discord]\` - Ban par pseudo Roblox (marche sans Jnkie)\n\`!${command} @discord [raison]\` - Ban par Discord (cherche auto via Jnkie comme sur ton screen)`);
+            return message.reply(`Usage:\n\`!${command} <roblox_username> [raison] [@discord]\`\nOu: \`!${command} @discord [raison]\` (via Jnkie)`);
         }
         
         const reason = args.slice(discordUser ? 1 : 1).filter(a=>!a.startsWith("<@")).join(" ") || (command==="whitelist" ? "Approved via ticket" : "No reason");
@@ -110,8 +131,7 @@ client.on('messageCreate', async (message) => {
             date: dateStr,
             reason: reason,
             discord: discordMention,
-            timestamp: Date.now(),
-            source: discordId ? "jnkie" : "manual"
+            timestamp: Date.now()
         };
         saveLists();
         
@@ -120,71 +140,121 @@ client.on('messageCreate', async (message) => {
             .setColor(isWhite?0x00FF00:0xFF0000)
             .setTitle(isWhite ? "✅ User Added to Whitelist" : "🚫 User Added to Blacklist")
             .addFields(
-                {name:"Roblox Username", value:robloxUsername},
-                {name:"Added by", value:message.author.toString()},
-                {name:"Date", value:dateStr},
-                {name:"Reason", value:reason},
-                {name:"Linked Discord", value:discordMention + (discordId ? ` (ID: ${discordId})` : "") + `\nJnkie Key: ZENOFINDER-... comme sur ton screen`},
+                {name:"Roblox Username", value:robloxUsername, inline:false},
+                {name:"Added by", value:message.author.toString(), inline:false},
+                {name:"Date", value:dateStr, inline:false},
+                {name:"Reason", value:reason, inline:false},
+                {name:"Linked Discord", value:discordMention, inline:false}
             )
             .setFooter({text:`ZENO Bot • ${isWhite?"Whitelist":"Blacklist"} — ${total} total | ${new Date().toLocaleString("fr-FR")}`})
             .setTimestamp();
         
         const channel = message.guild.channels.cache.find(c=>c.name.includes(isWhite?"whitelist":"blacklist"));
-        if(channel) await channel.send({embeds:[embed]});
-        else await message.channel.send({embeds:[embed]});
+        if(channel){
+            try { await channel.send({embeds:[embed]}); } catch(e){ console.log("[SEND ERROR]", e.message); }
+        } else {
+            await message.channel.send({embeds:[embed]});
+        }
         
         if(!isWhite){
-            message.reply(`🚫 **${robloxUsername}** (Discord: ${discordMention}) BLACKLIST\n→ Dans l'AJ il verra: "You have been placed on a blacklist by the owner."\n→ Son Discord ID ${discordId || "1324116758432317524"} est lié à son Roblox ${robloxUsername} via Jnkie comme sur ton screen.`);
+            await message.reply(`🚫 **${robloxUsername}** BLACKLIST (${total} total) → Dans l'AJ: "You have been placed on a blacklist by the owner."`);
         } else {
-            message.reply(`✅ **${robloxUsername}** WHITELIST (${total} total)`);
+            await message.reply(`✅ **${robloxUsername}** WHITELIST (${total} total)`);
+        }
+    }
+    
+    if(command==="unwhitelist" || command==="unblacklist"){
+        if(!isAdmin) return;
+        const robloxUsername = args[0];
+        if(!robloxUsername) return;
+        const isWhite = command==="unwhitelist";
+        const list = isWhite ? whitelist : blacklist;
+        if(list[robloxUsername.toLowerCase()]){
+            delete list[robloxUsername.toLowerCase()];
+            saveLists();
+            message.reply(`✅ **${robloxUsername}** retiré de la ${isWhite?"Whitelist":"Blacklist"}`);
         }
     }
     
     if(command==="check"){
         const q = args[0];
-        if(!q) return message.reply("`!check <roblox_pseudo> ou @discord`");
+        if(!q) return message.reply("`!check <roblox> ou @discord`");
         if(q.startsWith("<@")){
             const id = q.replace(/[<@!>]/g,"");
             const roblox = jnkieMap[id];
             if(roblox){
-                message.reply(`🔗 <@${id}> = **${roblox}** (trouvé via Jnkie comme ton screen 1324116758432317524 = KTASAbdoulaye)`);
+                message.reply(`🔗 <@${id}> = **${roblox}** (Jnkie)`);
+                // Check blacklist status of that roblox
+                if(blacklist[roblox.toLowerCase()]) message.reply(`🚫 **${roblox}** est BLACKLIST`);
+                else if(whitelist[roblox.toLowerCase()]) message.reply(`✅ **${roblox}** est WHITELIST`);
             } else {
-                message.reply(`❓ Pas trouvé pour <@${id}> dans Jnkie cache (${Object.keys(jnkieMap).length} liens chargés)`);
+                message.reply(`❓ Pas trouvé pour <@${id}> (${Object.keys(jnkieMap).length} liens)`);
             }
         } else {
             const low = q.toLowerCase();
-            if(blacklist[low]) message.reply(`🚫 **${q}** BLACKLIST - ${blacklist[low].reason}`);
-            else if(whitelist[low]) message.reply(`✅ **${q}** WHITELIST`);
+            if(blacklist[low]) message.reply(`🚫 **${q}** est **BLACKLIST** - ${blacklist[low].reason}`);
+            else if(whitelist[low]) message.reply(`✅ **${q}** est **WHITELIST**`);
             else message.reply(`❓ **${q}** ni whitelist ni blacklist`);
         }
     }
     
     if(command==="jnkie"){
         await syncJnkie();
-        message.reply(`🔄 Jnkie sync fait: ${Object.keys(jnkieMap).length} liens.\nEx: 1324116758432317524 = ${jnkieMap["1324116758432317524"] || "KTASAbdoulaye (ton screen)"}`);
+        message.reply(`🔄 Jnkie sync: ${Object.keys(jnkieMap).length} liens.\nEx: 1324116758432317524 = ${jnkieMap["1324116758432317524"] || "KTASAbdoulaye"}`);
+    }
+    
+    if(command==="botinfo"){
+        message.reply(`📊 W:${Object.keys(whitelist).length} B:${Object.keys(blacklist).length} J:${Object.keys(jnkieMap).length} | Guilds: ${client.guilds.cache.size}`);
     }
 });
 
-client.login(TOKEN);
+if(!TOKEN){
+    console.log("[ERROR] DISCORD_TOKEN missing! Set it in Render Environment Variables");
+} else {
+    client.login(TOKEN).then(()=>console.log("[LOGIN] Token OK, connecting...")).catch(e=>console.log("[LOGIN ERROR]", e.message, e.code));
+}
 
-const http = require('http');
+// API
 const server = http.createServer((req,res)=>{
     res.setHeader('Access-Control-Allow-Origin','*');
     res.setHeader('Content-Type','application/json');
-    if(req.url.startsWith('/check/')){
-        const username = decodeURIComponent(req.url.split('/check/')[1]||"").toLowerCase().trim();
+    
+    const url = req.url || "";
+    
+    if(url.startsWith('/check/')){
+        const username = decodeURIComponent(url.split('/check/')[1] || "").toLowerCase().trim();
+        const isBlacklisted = !!blacklist[username];
+        const isWhitelisted = !!whitelist[username];
         res.writeHead(200);
         res.end(JSON.stringify({
             username,
-            blacklisted: !!blacklist[username],
-            whitelisted: !!whitelist[username],
-            reason: blacklist[username]?.reason || null,
-            jnkie_linked: jnkieMap
+            blacklisted: isBlacklisted,
+            whitelisted: isWhitelisted,
+            reason: isBlacklisted ? blacklist[username].reason : (isWhitelisted ? whitelist[username].reason : null),
+            total_whitelist: Object.keys(whitelist).length,
+            total_blacklist: Object.keys(blacklist).length
         }));
+    } else if(url === '/whitelist'){
+        res.writeHead(200);
+        res.end(JSON.stringify(whitelist));
+    } else if(url === '/blacklist'){
+        res.writeHead(200);
+        res.end(JSON.stringify(blacklist));
     } else {
         res.writeHead(200);
-        res.end(JSON.stringify({status:"ZENO APP + JNKIE Online", whitelist:Object.keys(whitelist).length, blacklist:Object.keys(blacklist).length, jnkie_links:Object.keys(jnkieMap).length}));
+        res.end(JSON.stringify({
+            status: "ZENO APP + JNKIE Online",
+            whitelist: Object.keys(whitelist).length,
+            blacklist: Object.keys(blacklist).length,
+            jnkie_links: Object.keys(jnkieMap).length,
+            guilds: client.guilds ? client.guilds.cache.size : 0,
+            bot_tag: client.user ? client.user.tag : "connecting..."
+        }));
     }
 });
-server.listen(PORT, ()=>console.log(`[API] Port ${PORT}`));
-    
+
+server.listen(PORT, ()=>{
+    console.log(`[API] Listening on port ${PORT}`);
+    console.log(`[API] https://zeno-app-bot.onrender.com`);
+});
+            
