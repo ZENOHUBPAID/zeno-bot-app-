@@ -3,13 +3,15 @@ const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require
 const fs = require('fs');
 const http = require('http');
 
-const TOKEN = process.env.DISCORD_TOKEN;
-const JNKIE_API_KEY = process.env.JNKIE_API_KEY;
-const JNKIE_SCRIPT_ID = process.env.JNKIE_SCRIPT_ID || "ZENOFINDER";
+const RAW_TOKEN = process.env.DISCORD_TOKEN || "";
+const TOKEN = RAW_TOKEN.trim().replace(/["'\s]/g, "");
+const JNKIE_API_KEY = (process.env.JNKIE_API_KEY || "").trim();
+const JNKIE_SCRIPT_ID = (process.env.JNKIE_SCRIPT_ID || "ZENOFINDER").trim();
 const PORT = process.env.PORT || 10000;
 
-console.log("[ZENO] Starting... Token exists:", !!TOKEN);
-console.log("[ZENO] JNKIE key exists:", !!JNKIE_API_KEY);
+console.log("[ZENO] Starting... RAW_TOKEN length:", RAW_TOKEN.length, "TRIMMED length:", TOKEN.length);
+console.log("[ZENO] Token exists:", !!TOKEN, "First 10 chars:", TOKEN.slice(0,10));
+console.log("[ZENO] JNKIE key exists:", !!JNKIE_API_KEY, "len", JNKIE_API_KEY.length);
 
 let whitelist = {};
 let blacklist = {};
@@ -38,12 +40,14 @@ async function syncJnkie(){
         console.log("[JNKIE] Syncing from", url);
         const res = await fetch(url, { headers: { "Authorization": `Bearer ${JNKIE_API_KEY}`, "Content-Type": "application/json" } });
         if(!res.ok){
-            console.log("[JNKIE] API error", res.status, await res.text().then(t=>t.slice(0,200)));
+            const txt = await res.text();
+            console.log("[JNKIE] API error", res.status, txt.slice(0,300));
             return;
         }
         const data = await res.json();
         let count = 0;
         const keys = data.keys || data.data || data || [];
+        console.log("[JNKIE] Raw response keys count:", keys.length);
         for(const k of keys){
             const discordId = k.discordId || k.discord_id || k.userId || (k.discord && k.discord.id) || k.discordID;
             const robloxName = k.robloxUsername || k.roblox_username || k.robloxName || k.username || k.robloxUser || k.roblox;
@@ -55,7 +59,7 @@ async function syncJnkie(){
         saveLists();
         console.log(`[JNKIE SYNC] Loaded ${count} links. Example: ${Object.keys(jnkieMap)[0]} = ${Object.values(jnkieMap)[0]}`);
     } catch(e){
-        console.log("[JNKIE SYNC ERROR]", e.message);
+        console.log("[JNKIE SYNC ERROR]", e.message, e.stack?.slice(0,300));
     }
 }
 
@@ -77,6 +81,9 @@ client.on('ready', async () => {
 
 client.on('error', (e) => console.log("[DISCORD ERROR]", e.message));
 client.on('shardError', (e) => console.log("[SHARD ERROR]", e.message));
+client.on('debug', (m) => {
+    if(m.includes("Login") || m.includes("Ready") || m.includes("IDENTIFY")) console.log("[DEBUG]", m);
+});
 
 client.on('messageCreate', async (message) => {
     if(message.author.bot) return;
@@ -96,16 +103,14 @@ client.on('messageCreate', async (message) => {
         let discordUser = message.mentions.users.first();
         let discordId = null;
         
-        // Si mention Discord seule: chercher via Jnkie
         if(discordUser || (robloxUsername && robloxUsername.startsWith("<@"))){
             discordId = discordUser ? discordUser.id : robloxUsername.replace(/[<@!>]/g,"");
             if(jnkieMap[discordId]){
                 robloxUsername = jnkieMap[discordId];
                 await message.channel.send(`🔗 **Jnkie Link trouvé:** <@${discordId}> = **${robloxUsername}**`);
             } else {
-                // Si pas trouvé dans Jnkie, essayer de prendre le pseudo Roblox depuis le mentionné? Non, demander
                 if(!robloxUsername || robloxUsername.startsWith("<@")){
-                    return message.reply(`❌ J'ai pas trouvé le Roblox de <@${discordId}> dans Jnkie (${Object.keys(jnkieMap).length} liens chargés).\nUtilise: \`!${command} <roblox_username> [raison] [@discord]\``);
+                    return message.reply(`❌ J'ai pas trouvé le Roblox de <@${discordId}> dans Jnkie (${Object.keys(jnkieMap).length} liens).\nUtilise: \`!${command} <roblox_username> [raison] [@discord]\``);
                 }
             }
         }
@@ -151,13 +156,13 @@ client.on('messageCreate', async (message) => {
         
         const channel = message.guild.channels.cache.find(c=>c.name.includes(isWhite?"whitelist":"blacklist"));
         if(channel){
-            try { await channel.send({embeds:[embed]}); } catch(e){ console.log("[SEND ERROR]", e.message); }
+            try { await channel.send({embeds:[embed]}); } catch(e){ console.log("[SEND ERROR]", e.message); await message.channel.send({embeds:[embed]}); }
         } else {
             await message.channel.send({embeds:[embed]});
         }
         
         if(!isWhite){
-            await message.reply(`🚫 **${robloxUsername}** BLACKLIST (${total} total) → Dans l'AJ: "You have been placed on a blacklist by the owner."`);
+            await message.reply(`🚫 **${robloxUsername}** BLACKLIST (${total} total)`);
         } else {
             await message.reply(`✅ **${robloxUsername}** WHITELIST (${total} total)`);
         }
@@ -183,10 +188,11 @@ client.on('messageCreate', async (message) => {
             const id = q.replace(/[<@!>]/g,"");
             const roblox = jnkieMap[id];
             if(roblox){
-                message.reply(`🔗 <@${id}> = **${roblox}** (Jnkie)`);
-                // Check blacklist status of that roblox
-                if(blacklist[roblox.toLowerCase()]) message.reply(`🚫 **${roblox}** est BLACKLIST`);
-                else if(whitelist[roblox.toLowerCase()]) message.reply(`✅ **${roblox}** est WHITELIST`);
+                let status = "";
+                if(blacklist[roblox.toLowerCase()]) status = `🚫 **${roblox}** est BLACKLIST`;
+                else if(whitelist[roblox.toLowerCase()]) status = `✅ **${roblox}** est WHITELIST`;
+                else status = `❓ **${roblox}** ni whitelist ni blacklist`;
+                message.reply(`🔗 <@${id}> = **${roblox}** (Jnkie)\n${status}`);
             } else {
                 message.reply(`❓ Pas trouvé pour <@${id}> (${Object.keys(jnkieMap).length} liens)`);
             }
@@ -200,18 +206,25 @@ client.on('messageCreate', async (message) => {
     
     if(command==="jnkie"){
         await syncJnkie();
-        message.reply(`🔄 Jnkie sync: ${Object.keys(jnkieMap).length} liens.\nEx: 1324116758432317524 = ${jnkieMap["1324116758432317524"] || "KTASAbdoulaye"}`);
+        message.reply(`🔄 Jnkie sync: ${Object.keys(jnkieMap).length} liens.`);
     }
     
     if(command==="botinfo"){
-        message.reply(`📊 W:${Object.keys(whitelist).length} B:${Object.keys(blacklist).length} J:${Object.keys(jnkieMap).length} | Guilds: ${client.guilds.cache.size}`);
+        message.reply(`📊 W:${Object.keys(whitelist).length} B:${Object.keys(blacklist).length} J:${Object.keys(jnkieMap).length} | Guilds: ${client.guilds.cache.size} | Bot: ${client.user.tag}`);
     }
 });
 
-if(!TOKEN){
-    console.log("[ERROR] DISCORD_TOKEN missing! Set it in Render Environment Variables");
+if(!TOKEN || TOKEN.length < 50){
+    console.log("[ERROR] DISCORD_TOKEN missing or too short! Length:", TOKEN.length, "Set it in Render Environment Variables");
+    console.log("[ERROR] Make sure you copied the token from https://discord.com/developers/applications -> Bot -> Reset Token");
 } else {
-    client.login(TOKEN).then(()=>console.log("[LOGIN] Token OK, connecting...")).catch(e=>console.log("[LOGIN ERROR]", e.message, e.code));
+    console.log("[LOGIN] Attempting login with token length", TOKEN.length);
+    client.login(TOKEN).then(()=>{
+        console.log("[LOGIN] Token OK, connecting to Discord...");
+    }).catch(e=>{
+        console.log("[LOGIN ERROR] Failed to login:", e.message, "Code:", e.code);
+        console.log("[LOGIN ERROR] Check if token is valid and not expired. Reset it if needed.");
+    });
 }
 
 // API
