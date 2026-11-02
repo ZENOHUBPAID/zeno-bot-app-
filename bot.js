@@ -1,118 +1,158 @@
-// ZENO APP V9.6 - AUTO RETRY 429 + @MEMBER 1565109940757078108 + @ADMIN 1565109430880706570
-const Discord = require('discord.js');
+// ZENO APP V9.7 - FIX 429 HARD BAN - 5 MIN BACKOFF + NEW TOKEN CHECK
+// @MEMBER 1565109940757078108 - @ADMIN 1565109430880706570
+
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const fetch = require('node-fetch');
 
 const TOKEN = (process.env.DISCORD_TOKEN || '').trim();
 const PORT = process.env.PORT || 10000;
+
 const MEMBER_ROLE_ID = '1565109940757078108';
 const ADMIN_ROLE_ID = '1565109430880706570';
 
-console.log('[ZENO V9.6] Starting... Token length=' + TOKEN.length);
+console.log(`[ZENO V9.7] Starting... Token length=${TOKEN.length} first=${TOKEN.slice(0,12)}...`);
+console.log(`[ZENO V9.7] Time: ${new Date().toISOString()}`);
 
-const client = new Discord.Client({
-    intents: [
-        Discord.GatewayIntentBits.Guilds,
-        Discord.GatewayIntentBits.GuildMessages,
-        Discord.GatewayIntentBits.MessageContent,
-        Discord.GatewayIntentBits.GuildMembers
-    ]
-});
+if (!TOKEN) {
+    console.log("[FATAL] DISCORD_TOKEN vide ! Va dans Render Environment");
+}
 
-let slotsPaused = false;
-let loginAttempts = 0;
+let client = null;
+let attempt = 0;
+let isConnected = false;
 
-function hasAdmin(member) {
+function hasAdminRole(member) {
     if (!member) return false;
-    if (member.permissions.has('Administrator')) return true;
-    if (member.roles.cache.has(ADMIN_ROLE_ID)) return true;
-    return false;
+    return member.permissions.has('Administrator') || member.roles.cache.has(ADMIN_ROLE_ID);
 }
 
-async function sendLogs(isDown) {
-    const guild = client.guilds.cache.first();
-    if (!guild) return;
-    let channel = guild.channels.cache.find(c => c.name.includes('update-logs'));
-    if (!channel) channel = guild.channels.cache.find(c => c.name.includes('update'));
-    if (!channel) return console.log('[LOGS] No channel');
-    const mention = '<@&' + MEMBER_ROLE_ID + '>';
-    let content, embed;
-    if (isDown) {
-        content = mention + '\nLogs are down. Slots are paused — timers are frozen.';
-        embed = new Discord.EmbedBuilder().setColor(0xff0000).setTitle('⚠️ Logs Down').setDescription('**Logs are down. Slots are paused — timers are frozen.**').setTimestamp();
-        slotsPaused = true;
-    } else {
-        content = mention + '\nBots are back up. Slots unpaused - timers unfreezed.';
-        embed = new Discord.EmbedBuilder().setColor(0x00ff00).setTitle('✅ Bots Back Up').setDescription('**Bots are back up. Slots unpaused - timers unfreezed.**').setTimestamp();
-        slotsPaused = false;
-    }
+async function testToken() {
     try {
-        await channel.send({ content: content, embeds: [embed], allowedMentions: { roles: [MEMBER_ROLE_ID] } });
-        console.log('[LOGS] Sent ' + (isDown ? 'DOWN' : 'UP'));
-    } catch (e) { console.log('[LOGS] Error ' + e.message); }
+        const res = await fetch('https://discord.com/api/v10/users/@me', {
+            headers: { 'Authorization': `Bot ${TOKEN}` }
+        });
+        const text = await res.text();
+        console.log(`[TOKEN TEST] Status ${res.status}`);
+        
+        if (res.status === 200) {
+            const data = JSON.parse(text);
+            console.log(`[TOKEN TEST] ✅ OK Bot=${data.username}#${data.discriminator} ID=${data.id}`);
+            return { ok: true, data, retry: 0 };
+        }
+        if (res.status === 401) {
+            console.log(`[TOKEN TEST] ❌ 401 Invalid token - Le token est mort, reset dans Discord Dev Portal`);
+            console.log(`[TOKEN TEST] Body: ${text.slice(0,200)}`);
+            return { ok: false, retry: 300000, reason: 'invalid' };
+        }
+        if (res.status === 429) {
+            const json = JSON.parse(text);
+            const retry = json.retry_after || 60000;
+            console.log(`[TOKEN TEST] ❌ 429 Rate limit - retry_after ${retry}ms - IP ban Render`);
+            console.log(`[TOKEN TEST] C'est l'IP Render qui est ban, pas ton token. Attente ${Math.ceil(retry/1000)}s puis retry`);
+            return { ok: false, retry: Math.max(retry, 300000), reason: 'rate' }; // min 5 min
+        }
+        console.log(`[TOKEN TEST] Status ${res.status} Body: ${text.slice(0,200)}`);
+        return { ok: false, retry: 120000, reason: 'other' };
+    } catch(e) {
+        console.log(`[TOKEN TEST] Erreur fetch: ${e.message}`);
+        return { ok: false, retry: 120000, reason: 'error' };
+    }
 }
-
-client.on('ready', () => {
-    console.log('[ZENO V9.6] Connecté en tant que ' + client.user.tag + ' - ONLINE 🟢');
-    console.log('[CONFIG] MEMBER=' + MEMBER_ROLE_ID + ' ADMIN=' + ADMIN_ROLE_ID);
-});
-
-client.on('messageCreate', async (msg) => {
-    if (msg.author.bot) return;
-    if (!msg.content.startsWith('!')) return;
-    const cmd = msg.content.slice(1).trim().split(/\s+/)[0].toLowerCase();
-    if (cmd === 'logsdown' || cmd === 'logs_down') {
-        if (!hasAdmin(msg.member)) return msg.reply('❌ Seul <@&' + ADMIN_ROLE_ID + '> peut');
-        await sendLogs(true);
-        return msg.reply('✅ Logs Down avec <@&' + MEMBER_ROLE_ID + '>').catch(()=>{});
-    }
-    if (cmd === 'logsback' || cmd === 'botsup' || cmd === 'backup') {
-        if (!hasAdmin(msg.member)) return msg.reply('❌ Seul <@&' + ADMIN_ROLE_ID + '> peut');
-        await sendLogs(false);
-        return msg.reply('✅ Back Up avec <@&' + MEMBER_ROLE_ID + '>').catch(()=>{});
-    }
-    if (cmd === 'botinfo') {
-        const embed = new Discord.EmbedBuilder().setColor(0x00ff00).setTitle('ZENO APP V9.6 AUTO-RETRY').setDescription('🟢 Online\n@MEMBER: <@&' + MEMBER_ROLE_ID + '>\n@ADMIN: <@&' + ADMIN_ROLE_ID + '>\n\n!logsdown\n!logsback\n!botinfo').setTimestamp();
-        return msg.reply({ embeds: [embed], allowedMentions: { roles: [MEMBER_ROLE_ID, ADMIN_ROLE_ID] } }).catch(()=>{});
-    }
-});
 
 async function tryLogin() {
-    loginAttempts++;
-    console.log('[ZENO V9.6] Try login #' + loginAttempts + ' - Token length ' + TOKEN.length);
-    try {
-        const res = await fetch('https://discord.com/api/v10/users/@me', { headers: { 'Authorization': 'Bot ' + TOKEN } });
-        console.log('[TOKEN TEST] Status ' + res.status);
-        if (res.status === 200) {
-            const data = await res.json();
-            console.log('[TOKEN TEST] ✅ OK Bot=' + data.username);
-            await client.login(TOKEN);
-            console.log('[LOGIN] Login sent, waiting ready...');
+    if (isConnected) return;
+    attempt++;
+    console.log(`\n[ZENO V9.7] Try login #${attempt} - ${new Date().toLocaleTimeString()} - Token length ${TOKEN.length}`);
+    
+    const test = await testToken();
+    
+    if (!test.ok) {
+        if (test.reason === 'invalid') {
+            console.log(`[ANTI 429] Token invalide, reset obligatoire. Ne retry pas.`);
+            console.log(`[FIX] Va sur https://discord.com/developers/applications -> Bot -> Reset Token -> copie dans Render ENV`);
+            setTimeout(tryLogin, 300000); // retry dans 5 min au cas où tu changes token
             return;
-        } else if (res.status === 429) {
-            const body = await res.json().catch(() => ({}));
-            const retryAfter = body.retry_after || 30000;
-            console.log('[TOKEN TEST] 429 Rate limit - retry_after ' + retryAfter + 'ms - Attempt ' + loginAttempts);
-            console.log('[ANTI 429] Re-retry dans ' + Math.ceil(retryAfter/1000) + ' sec... Laisse le bot allumé, il va se connecter tout seul 🟢');
-            setTimeout(tryLogin, retryAfter + 2000);
-            return;
-        } else if (res.status === 401) {
-            console.log('[TOKEN TEST] 401 Invalid token - Reset token sur Discord Dev Portal puis Render Environment');
-            return;
-        } else {
-            const txt = await res.text();
-            console.log('[TOKEN TEST] Status ' + res.status + ' ' + txt.slice(0,200));
-            console.log('[LOGIN] Tentative quand meme...');
-            await client.login(TOKEN);
         }
-    } catch (e) {
-        console.log('[LOGIN ERROR] ' + e.message + ' - Retry dans 30 sec');
-        setTimeout(tryLogin, 30000);
+        console.log(`[ANTI 429] Re-retry dans ${Math.ceil(test.retry/1000)} sec... Laisse le bot allumé, il va se connecter tout seul 🟢 - Attempt ${attempt}`);
+        setTimeout(tryLogin, test.retry);
+        return;
     }
+
+    // Token OK, login discord.js
+    console.log(`[START] Token OK, login Discord.js...`);
+    
+    client = new Client({
+        intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
+    });
+
+    client.on('ready', () => {
+        isConnected = true;
+        console.log(`[ZENO V9.7] ✅ Connecté en tant que ${client.user.tag} - ONLINE 🟢`);
+        console.log(`[ZENO V9.7] ID: ${client.user.id}`);
+        console.log(`[CONFIG] MEMBER=${MEMBER_ROLE_ID} ADMIN=${ADMIN_ROLE_ID}`);
+    });
+
+    client.on('error', e => console.log(`[DISCORD ERROR] ${e.message}`));
+
+    client.on('messageCreate', async (message) => {
+        if (message.author.bot) return;
+        if (!message.content.startsWith('!')) return;
+        console.log(`[CMD] ${message.author.tag}: ${message.content}`);
+        const args = message.content.slice(1).trim().split(/\s+/);
+        const cmd = args.shift().toLowerCase();
+
+        if (cmd === 'logsdown' || cmd === 'logs_down') {
+            if (!hasAdminRole(message.member)) return message.reply(`❌ Seul <@&${ADMIN_ROLE_ID}> peut faire cette commande`).catch(()=>{});
+            const guild = message.guild;
+            const channel = guild.channels.cache.find(c => c.name.toLowerCase().includes('update-logs')) || guild.channels.cache.find(c => c.name.toLowerCase().includes('update'));
+            if (!channel) return message.reply("❌ Salon #update-logs pas trouvé").catch(()=>{});
+            const memberMention = `<@&${MEMBER_ROLE_ID}>`;
+            const embed = new EmbedBuilder().setColor(0xff0000).setTitle('⚠️ Logs Down').setDescription('**Logs are down. Slots are paused — timers are frozen.**\n\nLes bots sont en pause, les timers sont figés.').setTimestamp();
+            await channel.send({ content: `${memberMention}\nLogs are down. Slots are paused — timers are frozen.`, embeds: [embed], allowedMentions: { roles: [MEMBER_ROLE_ID] } }).catch(e=>console.log(e.message));
+            return message.reply(`✅ Logs Down envoyé avec <@&${MEMBER_ROLE_ID}>`).catch(()=>{});
+        }
+        if (cmd === 'logsback' || cmd === 'logs_up' || cmd === 'botsup') {
+            if (!hasAdminRole(message.member)) return message.reply(`❌ Seul <@&${ADMIN_ROLE_ID}> peut`).catch(()=>{});
+            const guild = message.guild;
+            const channel = guild.channels.cache.find(c => c.name.toLowerCase().includes('update-logs')) || guild.channels.cache.find(c => c.name.toLowerCase().includes('update'));
+            if (!channel) return;
+            const memberMention = `<@&${MEMBER_ROLE_ID}>`;
+            const embed = new EmbedBuilder().setColor(0x00ff00).setTitle('✅ Bots Back Up').setDescription('**Bots are back up. Slots unpaused - timers unfreezed.**').setTimestamp();
+            await channel.send({ content: `${memberMention}\nBots are back up. Slots unpaused - timers unfreezed.`, embeds: [embed], allowedMentions: { roles: [MEMBER_ROLE_ID] } }).catch(()=>{});
+            return message.reply(`✅ Bots Back Up envoyé`).catch(()=>{});
+        }
+        if (cmd === 'botinfo') {
+            const embed = new EmbedBuilder().setColor(isConnected ? 0x00ff00 : 0xff0000).setTitle('ZENO APP V9.7').setDescription(`Status: ${isConnected ? '🟢 Online' : '🔴 Offline'}\n@MEMBER: <@&${MEMBER_ROLE_ID}>\n@ADMIN: <@&${ADMIN_ROLE_ID}>\n\n!logsdown / !logsback (ADMIN only)`).setTimestamp();
+            return message.reply({ embeds: [embed], allowedMentions: { roles: [MEMBER_ROLE_ID, ADMIN_ROLE_ID] } }).catch(()=>{});
+        }
+    });
+
+    client.login(TOKEN).then(()=>console.log("[LOGIN] Login OK, attente ready...")).catch(e=>{
+        console.log(`[LOGIN ERROR] ${e.message}`);
+        if (e.message.includes('429') || e.code === 429) {
+            console.log(`[LOGIN ERROR] 429 -> retry dans 5 min`);
+            setTimeout(tryLogin, 300000);
+        } else if (e.message.includes('invalid') || e.message.includes('TOKEN_INVALID')) {
+            console.log(`[LOGIN ERROR] Token invalide -> reset token`);
+            setTimeout(tryLogin, 300000);
+        } else {
+            setTimeout(tryLogin, 120000);
+        }
+    });
 }
 
+// Start
 tryLogin();
 
 const app = express();
-app.get('/', (req, res) => res.json({ status: client.user ? 'Online ' + client.user.tag : 'Retrying login - 429 auto-retry', attempts: loginAttempts, ready: !!client.user }));
-app.listen(PORT, () => console.log('[API] Port ' + PORT));
+app.get('/', (req, res) => res.json({ 
+    status: isConnected ? `Online ${client?.user?.tag}` : `Waiting - Attempt ${attempt} - 429 anti ban 5min`, 
+    attempt, 
+    isConnected,
+    memberRole: MEMBER_ROLE_ID, 
+    adminRole: ADMIN_ROLE_ID,
+    tokenLength: TOKEN.length,
+    time: new Date().toISOString()
+}));
+app.listen(PORT, () => console.log(`[API] Port ${PORT} - https://zeno-app-bot.onrender.com`));
