@@ -3,6 +3,7 @@
 
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
+global.WebSocket = require('ws'); // Fix Node 20 WebSocket pour Supabase
 
 // CONFIG SUPABASE - Tu mets tes clés de supabase.com
 const SUPABASE_URL = process.env.SUPABASE_URL; // https://ton-projet.supabase.co
@@ -159,4 +160,3 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(DISCORD_TOKEN);
-            
