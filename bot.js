@@ -1,5 +1,4 @@
-// bot.js - ZENO BOT V18 - COPIE FACILE MOBILE
-// Message 1 = info, Message 2 = QUE le loadstring en texte brut, pas de cadre gris
+// bot.js - ZENO BOT V19 - GENERATETOKEN ENVOIE QUE LE LOADSTRING, RIEN D'AUTRE
 
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
@@ -63,7 +62,6 @@ client.on('interactionCreate', async interaction => {
             if (bl) { await interaction.editReply(`❌ ${robloxPseudo} est blacklist`); return; }
             const token = generateToken();
             const expires_at = new Date(Date.now() + jours * 24 * 60 * 60 * 1000).toISOString();
-            const expiresUnix = Math.floor(new Date(expires_at).getTime()/1000);
             const { error: insertError } = await supabase.from('tokens').insert({
                 token, discord_id: discordUser.id, discord_tag: discordUser.tag,
                 roblox_pseudo: robloxPseudo, description: `Cette clé est pour ${robloxPseudo} (@${discordUser.tag})`,
@@ -72,14 +70,9 @@ client.on('interactionCreate', async interaction => {
             if (insertError) { await interaction.editReply(`❌ Erreur Supabase: ${insertError.message}`); return; }
             await supabase.from('whitelist').upsert({ roblox_pseudo: robloxPseudo, discord_id: discordUser.id, discord_tag: discordUser.tag, token });
 
+            // QUE LE LOADSTRING, RIEN D'AUTRE
             const loadstringCode = `getgenv().SESSION_TOKEN = "${token}"\nloadstring(game:HttpGet("https://zeno-ws-server-us-east.onrender.com/loader?token="..getgenv().SESSION_TOKEN))()`;
-
-            // MESSAGE 1 = info
-            await interaction.editReply({
-                content: `**TAPE TO COPIE** - Pour **${robloxPseudo}** (<@${discordUser.id}>)\n⏱️ Temps: **${jours} jours** - Expire <t:${expiresUnix}:R> (<t:${expiresUnix}:F>)\n🌍 Région: **${region}**\n\n👇 **Copie le message juste en dessous :**`
-            });
-            // MESSAGE 2 = QUE le loadstring en texte brut, sans cadre, pour que Copier le texte sur téléphone copie QUE ça
-            await interaction.followUp({ content: loadstringCode });
+            await interaction.editReply({ content: loadstringCode });
         }
         if (interaction.commandName === 'whitelist') {
             const discordUser = interaction.options.getUser('discord_user');
@@ -141,4 +134,3 @@ client.on('interactionCreate', async interaction => {
     } catch (e) { console.error('Erreur:', e); try { await interaction.editReply(`❌ Erreur: ${e.message}`); } catch(_) {} }
 });
 client.login(DISCORD_TOKEN);
-                                         
