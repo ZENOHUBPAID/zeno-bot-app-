@@ -74,7 +74,7 @@ client.on('interactionCreate', async interaction => {
                 token,
                 discord_id: discordUser.id,
                 discord_tag: discordUser.tag,
-                roblox_pseudo,
+                roblox_pseudo: robloxPseudo,
                 description: `Cette clé est pour ${robloxPseudo} (@${discordUser.tag})`,
                 expires_at,
                 jours,
@@ -84,7 +84,7 @@ client.on('interactionCreate', async interaction => {
             });
             if (insertError) { await interaction.editReply(`❌ Erreur Supabase: ${insertError.message}`); return; }
 
-            await supabase.from('whitelist').upsert({ roblox_pseudo, discord_id: discordUser.id, discord_tag: discordUser.tag, token });
+            await supabase.from('whitelist').upsert({ roblox_pseudo: robloxPseudo, discord_id: discordUser.id, discord_tag: discordUser.tag, token });
 
             const embed = new EmbedBuilder().setColor(0x00FF00).setTitle('🔑 Bracelet Supabase Généré').setDescription(
                 `**Cette clé est pour ${robloxPseudo}**\n`+
@@ -102,7 +102,7 @@ client.on('interactionCreate', async interaction => {
         if (interaction.commandName === 'whitelist') {
             const discordUser = interaction.options.getUser('discord_user');
             const robloxPseudo = interaction.options.getString('roblox_pseudo');
-            await supabase.from('whitelist').upsert({ roblox_pseudo, discord_id: discordUser.id, discord_tag: discordUser.tag });
+            await supabase.from('whitelist').upsert({ roblox_pseudo: robloxPseudo, discord_id: discordUser.id, discord_tag: discordUser.tag });
             await supabase.from('blacklist').delete().eq('roblox_pseudo', robloxPseudo);
             await interaction.editReply(`✅ **${robloxPseudo}** (<@${discordUser.id}>) whitelist`);
         }
@@ -112,7 +112,7 @@ client.on('interactionCreate', async interaction => {
             const raison = interaction.options.getString('raison') || 'No reason';
             const { data: wl } = await supabase.from('whitelist').select('*').eq('discord_id', discordUser.id).maybeSingle();
             const robloxPseudo = wl?.roblox_pseudo || discordUser.tag;
-            await supabase.from('blacklist').insert({ roblox_pseudo, discord_id: discordUser.id, discord_tag: discordUser.tag, raison });
+            await supabase.from('blacklist').insert({ roblox_pseudo: robloxPseudo, discord_id: discordUser.id, discord_tag: discordUser.tag, raison });
             await supabase.from('whitelist').delete().eq('discord_id', discordUser.id);
             await supabase.from('tokens').delete().eq('discord_id', discordUser.id);
             await interaction.editReply(`🚫 **${robloxPseudo}** (<@${discordUser.id}>) blacklist\nRaison: ${raison}\nTous ses bracelets supprimés`);
@@ -163,3 +163,4 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(DISCORD_TOKEN);
+                                                               
