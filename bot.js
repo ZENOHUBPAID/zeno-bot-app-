@@ -10,6 +10,13 @@ const SUPABASE_URL = process.env.SUPABASE_URL; // https://ton-projet.supabase.co
 const SUPABASE_KEY = process.env.SUPABASE_KEY; // ta clé service_role
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+const express = require('express');
+const app = express();
+app.get('/', (req, res) => res.send('ZENO BOT V16 ONLINE - Supabase + Multi-regions'));
+app.get('/health', (req, res) => res.json({ status: 'online', bot: 'ZENO V16' }));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`[ZENO] Web server on port ${PORT} - pour Render`));
+
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
@@ -160,3 +167,4 @@ client.on('interactionCreate', async interaction => {
 });
 
 client.login(DISCORD_TOKEN);
+    
