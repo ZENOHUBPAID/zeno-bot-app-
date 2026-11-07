@@ -1,6 +1,5 @@
-// bot.js - ZENO BOT FINAL V17 - ROLE ONLY + TAPE TO COPIE + UPTIME
-// Role autorisé: 1568714459869085899 - Seul ce rôle peut utiliser les commandes
-// Bot: ZENO#8432
+// bot.js - ZENO BOT V18 - COPIE FACILE MOBILE
+// Message 1 = info, Message 2 = QUE le loadstring en texte brut, pas de cadre gris
 
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
@@ -9,7 +8,6 @@ try { global.fetch = require('node-fetch'); } catch(_) {}
 
 const express = require('express');
 const app = express();
-// Pour UptimeRobot - il ping cette URL toutes les 5 min pour que Render ne dorme pas
 app.get('/', (req, res) => res.send('ZENO BOT ONLINE - ZENO#8432'));
 app.get('/health', (req, res) => res.send('OK'));
 app.listen(process.env.PORT || 10000, () => console.log('Web server on'));
@@ -24,8 +22,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
-
-// SEUL CE ROLE PEUT UTILISER LE BOT
 const ALLOWED_ROLE = '1568714459869085899';
 
 function generateToken() {
@@ -44,73 +40,47 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
 (async () => {
-    try {
-        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-        console.log('Commandes enregistrées pour ZENO#8432');
-    } catch(e) { console.error('Erreur enregistrement commandes:', e.message); }
+    try { await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands }); console.log('Commandes enregistrées'); } catch(e) { console.error(e.message); }
 })();
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
-
-client.once('clientReady', () => {
-    console.log(`BOT ONLINE - ${client.user.tag}`);
-});
-client.once('ready', () => {
-    console.log(`BOT ONLINE (ready) - ${client.user.tag}`);
-});
+client.once('clientReady', () => console.log(`BOT ONLINE - ${client.user.tag}`));
+client.once('ready', () => console.log(`BOT ONLINE (ready) - ${client.user.tag}`));
 
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
-
-    // CHECK ROLE - Seul le rôle 1568714459869085899 peut utiliser le bot
     const member = interaction.member;
     const hasRole = member && member.roles && member.roles.cache.has(ALLOWED_ROLE);
-    if (!hasRole) {
-        await interaction.reply({ content: '❌ Tu as pas le rôle pour utiliser ce bot.', ephemeral: true });
-        return;
-    }
-
+    if (!hasRole) { await interaction.reply({ content: '❌ Tu as pas le rôle pour utiliser ce bot.', ephemeral: true }); return; }
     await interaction.deferReply();
-    console.log(`Commande: ${interaction.commandName} par ${interaction.user.tag}`);
-
     try {
         if (interaction.commandName === 'generatetoken') {
             const discordUser = interaction.options.getUser('discord_user');
             const robloxPseudo = interaction.options.getString('roblox_pseudo');
             const jours = interaction.options.getInteger('jours') || 30;
             const region = interaction.options.getString('region') || 'eu';
-
             const { data: bl } = await supabase.from('blacklist').select('*').eq('roblox_pseudo', robloxPseudo).maybeSingle();
             if (bl) { await interaction.editReply(`❌ ${robloxPseudo} est blacklist`); return; }
-
             const token = generateToken();
             const expires_at = new Date(Date.now() + jours * 24 * 60 * 60 * 1000).toISOString();
             const expiresUnix = Math.floor(new Date(expires_at).getTime()/1000);
-
             const { error: insertError } = await supabase.from('tokens').insert({
-                token,
-                discord_id: discordUser.id,
-                discord_tag: discordUser.tag,
-                roblox_pseudo: robloxPseudo,
-                description: `Cette clé est pour ${robloxPseudo} (@${discordUser.tag})`,
-                expires_at,
-                jours,
-                region,
-                frozen: false,
-                created_by: interaction.user.id
+                token, discord_id: discordUser.id, discord_tag: discordUser.tag,
+                roblox_pseudo: robloxPseudo, description: `Cette clé est pour ${robloxPseudo} (@${discordUser.tag})`,
+                expires_at, jours, region, frozen: false, created_by: interaction.user.id
             });
             if (insertError) { await interaction.editReply(`❌ Erreur Supabase: ${insertError.message}`); return; }
-
             await supabase.from('whitelist').upsert({ roblox_pseudo: robloxPseudo, discord_id: discordUser.id, discord_tag: discordUser.tag, token });
 
-            // MESSAGE SIMPLE - TAPE TO COPIE - Juste le loadstring à copier
             const loadstringCode = `getgenv().SESSION_TOKEN = "${token}"\nloadstring(game:HttpGet("https://zeno-ws-server-us-east.onrender.com/loader?token="..getgenv().SESSION_TOKEN))()`;
 
+            // MESSAGE 1 = info
             await interaction.editReply({
-                content: `**TAPE TO COPIE** - Pour **${robloxPseudo}** (<@${discordUser.id}>)\n⏱️ Temps: **${jours} jours** - Expire <t:${expiresUnix}:R> (<t:${expiresUnix}:F>)\n🌍 Région: **${region}**\n\n\`\`\`lua\n${loadstringCode}\n\`\`\`\n*Cette clé est pour ${robloxPseudo} uniquement - 1 seul compte*`
+                content: `**TAPE TO COPIE** - Pour **${robloxPseudo}** (<@${discordUser.id}>)\n⏱️ Temps: **${jours} jours** - Expire <t:${expiresUnix}:R> (<t:${expiresUnix}:F>)\n🌍 Région: **${region}**\n\n👇 **Copie le message juste en dessous :**`
             });
+            // MESSAGE 2 = QUE le loadstring en texte brut, sans cadre, pour que Copier le texte sur téléphone copie QUE ça
+            await interaction.followUp({ content: loadstringCode });
         }
-
         if (interaction.commandName === 'whitelist') {
             const discordUser = interaction.options.getUser('discord_user');
             const robloxPseudo = interaction.options.getString('roblox_pseudo');
@@ -118,7 +88,6 @@ client.on('interactionCreate', async interaction => {
             await supabase.from('blacklist').delete().eq('roblox_pseudo', robloxPseudo);
             await interaction.editReply(`✅ **${robloxPseudo}** (<@${discordUser.id}>) whitelist`);
         }
-
         if (interaction.commandName === 'blacklist') {
             const discordUser = interaction.options.getUser('discord_user');
             const raison = interaction.options.getString('raison') || 'No reason';
@@ -129,7 +98,6 @@ client.on('interactionCreate', async interaction => {
             await supabase.from('tokens').delete().eq('discord_id', discordUser.id);
             await interaction.editReply(`🚫 **${robloxPseudo}** (<@${discordUser.id}>) blacklist\nRaison: ${raison}\nTous ses bracelets supprimés`);
         }
-
         if (interaction.commandName === 'check') {
             const discordUser = interaction.options.getUser('discord_user');
             const robloxPseudo = interaction.options.getString('roblox_pseudo');
@@ -145,7 +113,6 @@ client.on('interactionCreate', async interaction => {
             }).join('\n\n');
             await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🔍 Check - Temps vérifiés').setDescription(desc).setColor(0x0099FF)] });
         }
-
         if (interaction.commandName === 'addtime') {
             const discordUser = interaction.options.getUser('discord_user');
             const heures = interaction.options.getInteger('heures');
@@ -154,16 +121,14 @@ client.on('interactionCreate', async interaction => {
                 const newExpires = new Date(new Date(t.expires_at).getTime() + heures * 60 * 60 * 1000).toISOString();
                 await supabase.from('tokens').update({ expires_at: newExpires }).eq('id', t.id);
             }
-            await interaction.editReply(`⏱️ ${heures > 0 ? '+' : ''}${heures}h ajouté à <@${discordUser.id}> (${tokens?.length || 0} token(s)) - Temps mis à jour`);
+            await interaction.editReply(`⏱️ ${heures > 0 ? '+' : ''}${heures}h ajouté à <@${discordUser.id}> (${tokens?.length || 0} token(s))`);
         }
-
         if (interaction.commandName === 'freezetimers') {
             const freeze = interaction.options.getBoolean('freeze');
             await supabase.from('freeze').upsert({ id: 1, frozen: freeze, timestamp: new Date().toISOString(), by: interaction.user.id });
             await supabase.from('tokens').update({ frozen: freeze }).neq('id', 0);
             await interaction.editReply({ content: freeze ? '<@&1565109940757078108> 🧊 Logs down, tous les timers freezés' : '<@&1565109940757078108> 🔥 Logs back, timers relancés', embeds: [new EmbedBuilder().setTitle(freeze ? '🧊 Freezé' : '🔥 Unfreezé').setDescription(freeze ? 'Tous les bracelets en pause' : 'Tout repart').setColor(freeze ? 0x00FFFF : 0x00FF00)] });
         }
-
         if (interaction.commandName === 'keys') {
             const { data: tokens, error } = await supabase.from('tokens').select('*').order('created_at', { ascending: false }).limit(20);
             if (error) { await interaction.editReply(`❌ Erreur: ${error.message}`); return; }
@@ -173,12 +138,7 @@ client.on('interactionCreate', async interaction => {
             }).join('\n') || 'Aucune clé';
             await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🔑 Clés Supabase').setDescription(list).setColor(0x0099FF)] });
         }
-
-    } catch (e) {
-        console.error('Erreur:', e);
-        try { await interaction.editReply(`❌ Erreur: ${e.message}`); } catch(_) {}
-    }
+    } catch (e) { console.error('Erreur:', e); try { await interaction.editReply(`❌ Erreur: ${e.message}`); } catch(_) {} }
 });
-
 client.login(DISCORD_TOKEN);
-                
+                                         
